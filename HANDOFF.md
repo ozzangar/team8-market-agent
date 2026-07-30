@@ -15,12 +15,15 @@ This repo is the team's working **and** submission repo. It **must stay PUBLIC**
 clone it at a pinned SHA for the 30% arch/repo score). Its `tools/` already contains the
 **proven `query_data` engine** and this handoff.
 
-**Repo URL:** `<TEAM_REPO_URL>`  ← filled in when the Mac session pushes; if still a placeholder,
-see "If the repo isn't pushed yet" below.
+**Repo URL:** `https://github.com/ozzangar/team8-market-agent`  (public — this IS the working
++ submission repo; keep it public and secret-free).
+> ⚠️ For the OFFICIAL submission, the repo may need to live under a team/org account rather
+> than `ozzangar`. If organizers require that, create it there and push the same contents;
+> otherwise this repo is fine. Register the final URL + pinned SHA in `submission.json`.
 
 ### 1. Get onto the code
 ```bash
-git clone <TEAM_REPO_URL> ~/team-agent
+git clone https://github.com/ozzangar/team8-market-agent ~/team-agent
 cd ~/team-agent
 git config user.name  "<you>"          # if not already set on the box
 git config user.email "<you@…>"
