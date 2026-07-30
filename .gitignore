@@ -1,0 +1,30 @@
+# Secrets — NEVER commit (repo is public)
+team.env
+*.env
+.env
+*.key
+*_token*
+# NGC / LiteLLM / cloudflared creds live in env only
+
+# Data — organizer-supplied, large, must not be redistributed
+data set/
+datasets/
+*.jsonl.gz
+
+# Models / training artifacts
+models/
+checkpoints/
+*.nemo
+*.safetensors
+hf_adapter/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+.vscode/
+*.swp
