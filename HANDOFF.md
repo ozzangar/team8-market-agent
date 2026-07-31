@@ -42,7 +42,7 @@ If it's not 54/54, the dataset path/format differs — fix that before building 
 The box reset once already today and the SSH tunnel is flaky, so **treat every push as your backup.**
 ```bash
 # after ANY change to query_data.py, re-prove it:
-python3 tools/test_public.py          # 54/54 or DON'T commit the tool change
+python3 tests/test_public.py          # 54/54 or DON'T commit the tool change
 git add -A
 git commit -m "clear message"
 git push
@@ -120,9 +120,9 @@ POST /query {"question": "..."}
 
 ## 3. ⭐ THE 40% ENGINE IS ALREADY BUILT AND PROVEN — `query_data`
 
-**Location (on this box, copied here by git):** `hackathon-build/tools/query_data.py`
+**Location (in the repo):** `src/agent/query_data.py`
 Pure Python stdlib (no deps). **Verified: reproduces ALL 15 public reference answers EXACTLY
-(54/54 checks pass).** Run `python3 hackathon-build/tools/test_public.py` to confirm.
+(54/54 checks pass).** Run `python3 tests/test_public.py` to confirm.
 
 Set `HACKATHON_DATA_DIR` to the on-box dataset path before using (see §6).
 
