@@ -1,9 +1,9 @@
 # HANDOFF — Cognitivo Hackathon, Team 8 (Hub24) · Day 3, 31 Jul 2026
 
-> **You are a fresh Claude Code session running ON box 13 (`spark-2b60`, the brain node).**
-> This doc is your complete brief. Read it fully before acting. It was written by the
-> prior session running on the user's Mac (which drove the box over a flaky Cloudflare
-> SSH tunnel — you don't have that problem, you're local).
+> **You are a fresh Claude Code session running ON the team's GB10 box (currently boxes 07/08
+> after a mid-day re-allocation — see §6).** This doc is your complete brief. Read it fully
+> before acting. It was written by the prior session on the user's Mac (which drove the box
+> over a flaky Cloudflare SSH tunnel — you're local, so no tunnel dependency).
 >
 > **⏰ HARD STOP 4:00 PM. Freeze building ~15:00, last hour = demo + write-up.**
 
@@ -165,17 +165,24 @@ Plus `coverage()` for the "is this cross-dataset question supportable?" case (MH
 
 ## 6. BOX / CLUSTER FACTS
 
-- **This box 13 = `spark-2b60` = `10.0.1.10` = BRAIN/agent/head node.** Serves Qwen on `:8000`, runs LiteLLM `:4000`, the agent server, and the eval harness.
-- **Box 14 = `10.0.1.11` = FINE-TUNE/model node.** Serves fine-tuned Nemotron on `:8001`. Reachable from box 13 (`ssh 10.0.1.11`, port 22 open).
-- **Qwen IS already serving on `:8000`** (`Qwen3.6-35B-A3B-Instruct-FP8`, vLLM, `max_model_len=4096` ⚠️ keep prompts tight). Leave it running.
-- **Models on disk:** `~/local-llm-setup/models/{Llama-3.1-Nemotron-Nano-8B-v1, Qwen3.6-35b-A3B-FP8}`.
-- **Scaffold:** `~/Cognitivo_Training/finagent-finetune-participant/` (training scripts + data + config).
-- **Datasets on box:** NOT yet located in home (guide references `~/Downloads/Jasonl format DataSets/...`). **FIND them:** `find / -iname "AFR_2015*" 2>/dev/null` etc., then `export HACKATHON_DATA_DIR=<the parent 'data set' dir>`. If not on box, the full datasets are in the cloned repo (`AI_Industry_Training_Hackathon/data set/`) — copy them over.
-- **LiteLLM config** (`~/litellm/config.yaml`) routes `agent-brain`→`10.0.1.10:8000`, `domain-ft`→`10.0.1.11:8001`.
+> ⚠️ **ALLOCATION CHANGED DURING THE DAY.** Team bounced 07→13/14→back to **07/08** (boxes 13/14
+> were rebooting every ~15-90 min + console login broke; 07/08 were stable earlier). The facts
+> below were re-verified on **box 07 (`aitopatom-2b06`, user `cognitivo_g07`)**. If you're on a
+> different box, RE-CHECK the two things that move per-box: **(a) the LiteLLM `agent-brain` IP**
+> and **(b) where the datasets + fine-tune scaffold live.** Everything in `src/` reads endpoints
+> from env vars, so only config changes — never code.
 
-### ⚠️ Permissions (tested)
-- Home is writable, Python 3.12 + pip (user site) work, ports bindable, box 14 reachable. **All agent-building works with no sudo.**
-- **`docker` needs a PASSWORD sudo** (`cognitivo_g13` not in docker group). Blocks NeMo training + vLLM serving containers. **FIX: ask staff `sudo usermod -aG docker cognitivo_g13` + re-login**, or run the container scripts at the physical keyboard.
+- **CURRENT allocation = boxes 07 & 08.** SSH alias `team-atom` → `ssh-gigabyte07.uiof.ai` / `cognitivo_g07` (already in `~/.ssh/config` on the Mac; passwordless key installed). Box 07 = `aitopatom-2b06`.
+- **Brain/agent/head node** serves Qwen on `:8000` and runs LiteLLM `:4000` + the agent server + eval harness. **Fine-tune/model node** serves fine-tuned Nemotron on `:8001`.
+- **⚠️ Box-07 LiteLLM config (`~/litellm/config.yaml`) currently routes:** `agent-brain` → **`http://10.3.0.211:8000/v1`** (note the `10.3.0.x` subnet — NOT the old `10.0.1.10`), `domain-ft` → **`http://10.0.1.11:8001/v1`** (this is a STALE 13/14 IP — **repoint it at box 08's real IP** once you have it before serving the adapter). Confirm both with staff / `ip addr` on each node.
+- **Qwen brain** = `Qwen3.6-35B-A3B(-Instruct)-FP8`, vLLM, `max_model_len=4096` ⚠️ keep prompts tight. Leave it running (organizer-supplied).
+- **Models on disk (was on box 13):** `~/local-llm-setup/models/{Llama-3.1-Nemotron-Nano-8B-v1, Qwen3.6-35b-A3B-FP8}`. **On box 07 this path was NOT confirmed** — locate with `find ~ -maxdepth 4 -iname "*Nemotron*" 2>/dev/null`.
+- **⚠️ Fine-tune scaffold (`~/Cognitivo_Training/finagent-finetune-participant/`) + prepared training data were on box 13, NOT found on box 07.** Locate on 07/08 (`find ~ -maxdepth 3 -type d -iname "*ognitivo_Training*"`), or clone/copy the scaffold over. Don't assume it's present.
+- **Datasets on box:** locate with `find / -iname "AFR_2015*" 2>/dev/null | head`, then `export HACKATHON_DATA_DIR=<parent 'data set' dir>`. If absent, the full datasets are in the cloned official repo (`AI_Industry_Training_Hackathon/data set/`) — copy them over. **The engine is verified against that exact data; confirm `python3 tests/test_public.py` = 54/54 with whatever path you set.**
+
+### ⚠️ Permissions (tested on 13; re-verify on 07/08 — likely same pattern)
+- Home writable, Python 3.12 + pip (user site) work, ports bindable, peer node reachable over SSH. **All agent-building works with no sudo.**
+- **`docker` needs a PASSWORD sudo** (user not in docker group). Blocks NeMo training + vLLM serving containers. **FIX: ask staff `sudo usermod -aG docker $USER` + re-login**, or run container scripts at the keyboard. (On box 07 the user is `cognitivo_g07`.)
 
 ## 7. FINE-TUNE CHEAT-SHEET (scaffold: `~/Cognitivo_Training/finagent-finetune-participant/`)
 
