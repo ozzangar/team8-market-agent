@@ -1,0 +1,5 @@
+# Agent server deps. query_data.py itself is pure stdlib (no deps).
+fastapi
+uvicorn[standard]
+openai>=1.0
+pydantic>=2

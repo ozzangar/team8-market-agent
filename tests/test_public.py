@@ -3,8 +3,8 @@ Verify query_data reproduces the EXACT numbers in the 15 public reference answer
 Each check prints PASS/FAIL with the computed value vs the reference fact.
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from query_data import query_data, coverage
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+from agent.query_data import query_data, coverage
 
 P = 0
 F = 0

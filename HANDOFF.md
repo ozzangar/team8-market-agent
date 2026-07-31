@@ -34,7 +34,7 @@ git config user.email "<you@…>"
 ```bash
 # point at the on-box 'data set' dir (see §6 to locate it), then:
 export HACKATHON_DATA_DIR="<abs path to 'data set'>"
-python3 tools/test_public.py          # MUST print "54 passed, 0 failed"
+python3 tests/test_public.py          # MUST print "54 passed, 0 failed"
 ```
 If it's not 54/54, the dataset path/format differs — fix that before building anything on top.
 
@@ -134,6 +134,24 @@ Signature: `query_data(dataset, metric, **params)`. Metrics implemented & tested
 | `asx` | `dimensions`, `annual_return(ticker=,year=)`, `full_sample_return(ticker=)`, `rank_annual_returns(year=,exclude_tabcorp=True)`, `rank_full_sample_returns`, `avg_volume(exclude_tabcorp=True)`, `max_drawdown(ticker=` or ranked `top=3)`, `window_return(ticker=,start=,end=)`, `basket_window_return(start=,end=,tickers=?)`, `volatility(ticker=,year=?)`, `correlation(ticker_a=,ticker_b=)`, `quote(ticker=,date=)` |
 | `afr` | `count(pattern=)`, `count_by_year`, `count_by_month`, `count_year(pattern=,year=)`, `peak_year_and_month`, `share(pattern=,year=?)`, `find_article(headline=,date=?)` |
 Plus `coverage()` for the "is this cross-dataset question supportable?" case (MHQ090).
+`find_article` is **paraphrase-robust**: exact-substring fast-path, else keyword-overlap +
+finance synonym expansion (stocks↔shares, vaccine↔immunisation…) ranked over HEADLINE(×3)+INTRO,
+date-anchored. Verified: finds all 3 public sentiment articles from reworded prompts, even with no date.
+
+### 3.5 THE AGENT IS ALREADY BUILT + TESTED (in `src/`)
+The full prescribed pipeline is written and **proven end-to-end locally against a mock Qwen/Nemotron**:
+- `src/server.py` — FastAPI `GET /health` (200) + `POST /query`. Concurrency-safe (runs the blocking
+  pipeline via `asyncio.to_thread`; verified 3 simultaneous). Always returns non-empty valid JSON.
+- `src/agent/agent.py` — the reason→act→synthesize loop. Qwen brain emits tool calls → runtime
+  dispatches to `query_data` → results back to brain (loop, capped) → synthesis. `mock` mode uses a
+  deterministic synthesizer (no FT model needed); `llm` mode routes synthesis through Nemotron.
+  Never raises — FT-down falls back to mock rendering so `/query` always answers.
+- `src/agent/tool_schema.py` — OpenAI tool schema + brain system prompt (embeds the reproducibility
+  rules) + runtime dispatcher. Accepts reference-agent arg aliases (`date_from`, `exclude_tickers`).
+- `src/agent/config.py` — all endpoints/keys/port/mode from env (nothing hard-coded).
+- `tests/mock_litellm.py` — stand-in OpenAI server for local testing (NOT shipped/served).
+**Proven:** MHQ001/055/049/061 returned exact correct answers through real `POST /query`; `/health`=200;
+3 concurrent OK; mock-mode + FT-down both still answer. So on box 7 this is **deploy + wire**, not build.
 
 ### 🔴 REPRODUCIBILITY RULES (baked into the tool; a judge scores 0 on the component if broken)
 - **EXCLUDE Tabcorp (`TAH.AX`)** from ASX rankings/baskets/extremes/avg-volume unless explicitly asked. Its +2660% return is a flagged artifact; it also has the highest raw volume (would wrongly win MHQ049).
@@ -150,18 +168,20 @@ Plus `coverage()` for the "is this cross-dataset question supportable?" case (MH
 - **ASX** 18 files `<Name>-ASX-2015-2021.jsonl`, each 1774 rows. Fields: `ticker,date(YYYY-MM-DD),open,high,low,close,volume`. **The `ticker` field inside the file is authoritative** (Qantas→QAN.AX, Rio→RIO.AX, Tabcorp→TAH.AX, Aurizon→AZJ.AX, Cromwell→CMW.AX, Stockland→SGP.AX, Suncorp→SUN.AX, Transurban→TCL.AX; rest are obvious). Full float precision — keep it, round only at output.
 - **AFR** 85 monthly files `AFR_YYYYMMDD-YYYYMMDD.jsonl`, ~219,538 articles total. Fields: `HEADLINE, SUBHEAD (can be empty), INTRO, TEXT, NEWSPAPER, PUBLICATIONDATE (YYYYMMDD string)`. Records not necessarily chronological within a file.
 
-## 5. WHAT'S LEFT TO BUILD (priority order)
+## 5. WHAT'S LEFT TO DO (priority order) — the agent is BUILT + TESTED, mostly wiring now
 
-1. **[40%] Wrap `query_data` in the agent** — build the FastAPI server in `src/`:
-   - `GET /health` → `{"status":"ok"}` (HARD GATE: not 200 = team skipped = zero hidden points).
-   - `POST /query` {"question"} → run the Qwen→tools→Nemotron loop → `{"answer",steps?,tool_trace?}`.
-   - Qwen (agent-brain) gets a system prompt with the `query_data` tool schema + metric docs + the reproducibility rules, and emits tool calls. Runtime dispatches to `query_data`. Feed results back; when Qwen stops calling tools, hand (question + accumulated results) to Nemotron for synthesis.
-   - **Concurrency: ≥3 simultaneous /query, thread-safe, no shared mutable state** (harness uses `--workers 3`).
-   - **≤60s/answer** (else −20%; >300s = 0). Aim **≤3 tool calls/question**. Don't `list` big datasets into the model.
-   - Every question returns an answer (state the limitation if evidence insufficient; never empty/invented).
-2. **[30%] Fine-tune Nemotron-8B** — mostly scripted (§7). Run smoke test → train → eval step-20 → serve on :8001 → flip `DOMAIN_PREDICT_MODE=llm` → produce base-vs-tuned comparison.
-3. **[30%] Repo hygiene** — public repo, `submission.json` at root with pinned 40-char SHA, README (arch, run cmd, endpoints, training summary, base-vs-tuned, limitations), `training/` + `logs/` evidence, copy `Participant_Package/` in, **NO secrets**.
-4. Wire `mock→llm`, verify one public question end-to-end through the full pipeline.
+The FastAPI agent is **already written and proven end-to-end locally** (see §3.5). Remaining:
+
+1. **[40%] Deploy + wire the agent on box 7** (code exists in `src/`, don't rebuild):
+   - `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt` (query_data itself is stdlib).
+   - `export HACKATHON_DATA_DIR="$HOME/projects/AI_Industry_Training_Hackathon/data set"` then `python3 tests/test_public.py` → **must be 54/54** with on-box data.
+   - Run in **mock mode now** (brain down): `DOMAIN_PREDICT_MODE=mock (cd src && uvicorn server:app --host 0.0.0.0 --port <PORT>)` → `curl :PORT/health` = 200, `POST /query` returns answers. Proves deploy.
+   - When Qwen+LiteLLM are back: `source ~/team.env`, set `DOMAIN_PREDICT_MODE=llm`, point `LITELLM_BASE_URL` at `:4000`, re-test one public Q end-to-end.
+   - Contract already handled in code: `/health` 200, `/query` JSON, `steps`/`tool_trace`, ≥3 concurrency (asyncio.to_thread), ≤60s (short loop), always-non-empty answer, mock/FT-down graceful fallback.
+   - **⚠️ PORT: §9 landmine unresolved — :8001-on-head vs :5000. Set `AGENT_PORT` accordingly once confirmed; env-driven, no code change.**
+2. **[30%] Fine-tune Nemotron-8B on box 8** — scripted (§7). smoke test → train → eval step-20 → serve on `10.0.1.11:8001` → flip `DOMAIN_PREDICT_MODE=llm` → base-vs-tuned comparison. (docker works; need box-8 SSH per §6.4 or a keyboard operator; locate the scaffold per §6.3.)
+3. **[30%] Repo hygiene** — this repo IS the submission repo (public). Add `submission.json` at root (pinned 40-char SHA, agent endpoint IP:PORT, model endpoint :8001), flesh out README (arch, run cmd, endpoints, training summary, base-vs-tuned, limitations), copy `Participant_Package/` in, `training/`+`logs/` evidence, **NO secrets**.
+4. **Optional insurance (only if time):** a semantic `retrieve` fallback for title-less AFR sentiment Qs. `find_article` already does keyword+synonym+date ranking (handles paraphrase), so this is low priority.
 
 ## 6. BOX / CLUSTER FACTS
 
@@ -172,13 +192,24 @@ Plus `coverage()` for the "is this cross-dataset question supportable?" case (MH
 > and **(b) where the datasets + fine-tune scaffold live.** Everything in `src/` reads endpoints
 > from env vars, so only config changes — never code.
 
-- **CURRENT allocation = boxes 07 & 08.** SSH alias `team-atom` → `ssh-gigabyte07.uiof.ai` / `cognitivo_g07` (already in `~/.ssh/config` on the Mac; passwordless key installed). Box 07 = `aitopatom-2b06`.
-- **Brain/agent/head node** serves Qwen on `:8000` and runs LiteLLM `:4000` + the agent server + eval harness. **Fine-tune/model node** serves fine-tuned Nemotron on `:8001`.
-- **⚠️ Box-07 LiteLLM config (`~/litellm/config.yaml`) currently routes:** `agent-brain` → **`http://10.3.0.211:8000/v1`** (note the `10.3.0.x` subnet — NOT the old `10.0.1.10`), `domain-ft` → **`http://10.0.1.11:8001/v1`** (this is a STALE 13/14 IP — **repoint it at box 08's real IP** once you have it before serving the adapter). Confirm both with staff / `ip addr` on each node.
-- **Qwen brain** = `Qwen3.6-35B-A3B(-Instruct)-FP8`, vLLM, `max_model_len=4096` ⚠️ keep prompts tight. Leave it running (organizer-supplied).
-- **Models on disk (was on box 13):** `~/local-llm-setup/models/{Llama-3.1-Nemotron-Nano-8B-v1, Qwen3.6-35b-A3B-FP8}`. **On box 07 this path was NOT confirmed** — locate with `find ~ -maxdepth 4 -iname "*Nemotron*" 2>/dev/null`.
-- **⚠️ Fine-tune scaffold (`~/Cognitivo_Training/finagent-finetune-participant/`) + prepared training data were on box 13, NOT found on box 07.** Locate on 07/08 (`find ~ -maxdepth 3 -type d -iname "*ognitivo_Training*"`), or clone/copy the scaffold over. Don't assume it's present.
-- **Datasets on box:** locate with `find / -iname "AFR_2015*" 2>/dev/null | head`, then `export HACKATHON_DATA_DIR=<parent 'data set' dir>`. If absent, the full datasets are in the cloned official repo (`AI_Industry_Training_Hackathon/data set/`) — copy them over. **The engine is verified against that exact data; confirm `python3 tests/test_public.py` = 54/54 with whatever path you set.**
+### ✅ BOX-ROLE DECISION (verified on box 07 via `ip addr` + LiteLLM config + live ports)
+- **BOX 7 = AGENT + BRAIN (head node).** Dual-homed: `10.0.1.10` (internal cluster link to box 8) **and** `10.3.0.211`. LiteLLM routes `agent-brain` → `10.3.0.211:8000` = **box 7's own interface**, so Qwen serves here. **Run the FastAPI agent server (`src/server.py`) HERE.** `cognitivo_g07` user.
+- **BOX 8 = FINE-TUNE + serve Nemotron (`10.0.1.11:8001`).** `domain-ft` routes here; `:8001` already returned HTTP 200 when probed. **Run the LoRA fine-tune + vLLM serving HERE.** Matches the official execution guide (brain node serves Qwen+agent; model node serves FT Nemotron on :8001).
+- This split is the organizers' intended layout, not a guess — the config, the network interfaces, and the guide all agree.
+
+### CONFIRMED FACTS (box 07, this session)
+- SSH alias `team-atom` → `ssh-gigabyte07.uiof.ai` / `cognitivo_g07` (in Mac `~/.ssh/config`, passwordless). Box 07 hostname = `aitopatom-2b06`.
+- **✅ DATASETS ARE ON BOX 7:** `~/projects/AI_Industry_Training_Hackathon/data set/` (AFR/ASX/RBA all present). → `export HACKATHON_DATA_DIR="$HOME/projects/AI_Industry_Training_Hackathon/data set"`.
+- **✅ Nemotron-8B on disk (2 copies):** `~/local-llm-setup/models/Llama-3.1-Nemotron-Nano-8B-v1` and `~/Desktop/Setup_folder/models/Llama-3.1-Nemotron-Nano-8B-v1`.
+- **✅ docker WORKS for `cognitivo_g07`** (in the docker group — NO sudo needed). Fine-tune + vLLM serving are UNBLOCKED. (This was the big blocker on box 13; gone here.)
+- **✅ Python 3.12**, ports bindable (:5000 free). Repo cloned at `~/team-agent`.
+- **LiteLLM config** `~/litellm/config.yaml`: `agent-brain`→`10.3.0.211:8000`, `domain-ft`→`10.0.1.11:8001`.
+
+### 🔴 STILL BLOCKED (organizer / setup actions — a box-7 session can't fix these alone)
+1. **Qwen brain + LiteLLM are DOWN** — `:8000` and `:4000` both returned `000` (box rebooted, organizer services didn't restart). **Agent can't run end-to-end until staff restart `agent-brain` + LiteLLM.** Build/test in `mock` mode meanwhile.
+2. **`~/team.env` MISSING** on box 7 (LiteLLM key + endpoints). Ask staff to drop it; source before serving.
+3. **Fine-tune scaffold** (`~/Cognitivo_Training/finagent-finetune-participant/` — scripts + prepared 48k/6k/6k data) was on box 13, **not confirmed on 07/08**. Locate (`find ~ -maxdepth 3 -type d -iname "*ognitivo_Training*"`) or copy it over before training. Nemotron weights ARE present (above).
+4. **Box 8 SSH from box 7** = `Permission denied (publickey)`. To drive box-8 training from a box-7 session: on box 7 run `ssh-copy-id cognitivo_g07@10.0.1.11` (needs box 8 password once), then `ssh 10.0.1.11` works. OR run training at box 8's keyboard.
 
 ### ⚠️ Permissions (tested on 13; re-verify on 07/08 — likely same pattern)
 - Home writable, Python 3.12 + pip (user site) work, ports bindable, peer node reachable over SSH. **All agent-building works with no sudo.**
@@ -210,8 +241,8 @@ Agent server launch: `uvicorn <module>:app --host 0.0.0.0 --port <PORT>` (see po
 ## 9. 🚨 OPEN QUESTIONS — ASK AN ORGANIZER BEFORE OFFICIAL EVAL
 
 1. **PORT CONTRADICTION.** Live Setup Instructions say: *agent HTTP server on **:8001** of the head node, harness connects to **localhost:8001***. But execution guide + `submission_template.json` say agent on **:5000** registered by **IP** (harness "on a different machine"), and **:8001 is the Nemotron vLLM port**. → **ASK: which port does the agent bind on the head node, and does the harness hit localhost or the registered IP?** Wrong = skipped = ZERO hidden points. (Likely: agent :8001 on brain node, Nemotron :8001 on the *other* node — different machines. Confirm.)
-2. **`~/team.env` not present on box 13** — need it for LiteLLM key + endpoints. Ask staff to drop it.
-3. **docker group** — get `cognitivo_g13` added (see §6) to unblock train/serve headless.
+2. **`~/team.env` not present on box 7** — need it for LiteLLM key + endpoints. Ask staff to drop it.
+3. **Qwen brain + LiteLLM DOWN on box 7** (`:8000`/`:4000` = `000` after reboot) — ask staff to restart the organizer `agent-brain` + LiteLLM services. (docker is NOT a blocker here — `cognitivo_g07` has docker access.)
 
 ## 10. SUBMISSION CONTRACT
 
@@ -228,15 +259,17 @@ Agent server launch: `uvicorn <module>:app --host 0.0.0.0 --port <PORT>` (see po
 ## 12. STATE / MEMORY
 - Full evolving plan is in the Mac session's memory: `day3-hackathon-plan.md` (locked decisions, all brief facts, reproducibility rules, port landmine).
 - Official repo cloned at (Mac) `aitraining/AI_Industry_Training_Hackathon/` — the 15 public Qs, templates, `validate.json`, all guides.
-- **DONE this session:** SSH working, repo cloned, brief fully parsed, `query_data` built + 54/54 verified, this handoff.
-- **NEXT:** find on-box datasets → build `src/` FastAPI agent (Qwen→query_data→Nemotron) → smoke-test fine-tune → serve :8001 → mock→llm → end-to-end on public Qs → repo + submission.json.
+- **DONE (Mac session):** SSH working; official repo cloned; brief fully parsed; `query_data` built + **54/54 verified**; `find_article` upgraded to paraphrase-robust; **full FastAPI agent built + proven end-to-end (mock Qwen/Nemotron): /health 200, correct /query answers, 3-concurrent, FT-down fallback**; box roles decided (7=agent, 8=train); repo public + cloned to box 7 `~/team-agent`.
+- **NEXT (box 7 session):** venv + deps → 54/54 on-box → run agent in mock mode (deploy proof) → [staff: restart Qwen/LiteLLM + drop team.env] → wire llm mode + end-to-end → [box 8: fine-tune] → submission.json + README.
 
 ---
-**First moves on the box (in order):**
-1. **GIT section above** — clone the repo, run `tools/test_public.py`, confirm **54/54**.
-2. Resolve the **3 open questions in §9** with an organizer (port, team.env, docker group).
-3. Locate on-box datasets (§6) and set `HACKATHON_DATA_DIR`.
-4. Start the `src/` agent (§5). **Build the agent FIRST — it's the 40% and it gates the fine-tune eval.**
+**First moves on the box 7 session (in order):**
+1. `cd ~/team-agent && git pull` (get the latest — agent code + this handoff).
+2. `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
+3. `export HACKATHON_DATA_DIR="$HOME/projects/AI_Industry_Training_Hackathon/data set"` → `.venv/bin/python tests/test_public.py` → confirm **54/54**.
+4. **Deploy proof (no brain needed):** `DOMAIN_PREDICT_MODE=mock` → `cd src && ../.venv/bin/uvicorn server:app --host 0.0.0.0 --port <PORT>`; `curl :PORT/health` = 200, `POST /query` returns answers.
+5. Ask staff the **§9 items** (port decision, restart Qwen/LiteLLM, `team.env`). In parallel, set up box-8 SSH (§6.4) and start the **fine-tune** (long pole).
+6. When brain's back: `source ~/team.env`, `DOMAIN_PREDICT_MODE=llm`, end-to-end on a public Q.
 
-Paths in this doc assume you `git clone`d to `~/team-agent`, so `query_data` lives at
-`~/team-agent/tools/query_data.py`. Adjust if you cloned elsewhere.
+Paths assume the repo is at `~/team-agent` → engine at `~/team-agent/src/agent/query_data.py`,
+tests at `~/team-agent/tests/test_public.py`, server at `~/team-agent/src/server.py`.

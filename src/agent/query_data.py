@@ -45,7 +45,7 @@ from datetime import datetime
 # ---------------------------------------------------------------------------
 _DEFAULT_DATA = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "..", "..", "AI_Industry_Training_Hackathon", "data set",
+    "..", "..", "..", "AI_Industry_Training_Hackathon", "data set",
 )
 DATA_DIR = os.environ.get("HACKATHON_DATA_DIR", os.path.abspath(_DEFAULT_DATA))
 
@@ -446,6 +446,68 @@ def _afr_haystack(rec):
     return " ".join(str(rec.get(k, "") or "") for k in ("HEADLINE", "SUBHEAD", "INTRO", "TEXT"))
 
 
+# Stopwords dropped when keyword-matching a headline query (paraphrase-robust search).
+_STOP = {
+    "the", "a", "an", "on", "in", "of", "to", "for", "and", "or", "as", "at", "by",
+    "with", "from", "is", "are", "be", "its", "it", "this", "that", "these", "those",
+    "article", "story", "piece", "report", "retrieve", "find", "about", "afr", "headline",
+    "published", "dated", "titled", "entitled", "news",
+}
+
+# Light synonym expansion for finance-headline paraphrases (stocks<->shares etc.).
+_SYN = {
+    "stocks": {"shares", "equities", "stock"}, "shares": {"stocks", "equities", "share"},
+    "rise": {"gain", "climb", "jump", "rally", "soar", "surge", "up"},
+    "rises": {"gains", "climbs", "jumps"}, "fall": {"drop", "decline", "slump", "sink", "down"},
+    "vaccine": {"vaccination", "immunisation", "immunization", "jab"},
+    "rollout": {"roll-out", "rollouts"}, "rates": {"rate"}, "rate": {"rates"},
+    "rba": {"reserve bank", "central bank"},
+}
+
+
+def _tokens(text):
+    return [t for t in re.findall(r"[a-z0-9]+", (text or "").lower()) if t not in _STOP and len(t) > 1]
+
+
+def _expand(tokens):
+    out = set(tokens)
+    for t in tokens:
+        out |= _SYN.get(t, set())
+    return out
+
+
+def _norm_afr_date(d):
+    """Accept 'YYYYMMDD', 'YYYY-MM-DD', '23 Feb 2021' -> 'YYYYMMDD' (or None)."""
+    if not d:
+        return None
+    d = str(d).strip()
+    if re.fullmatch(r"\d{8}", d):
+        return d
+    for fmt in ("%Y-%m-%d", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(d, fmt).strftime("%Y%m%d")
+        except ValueError:
+            pass
+    return None
+
+
+def _article_payload(r, score=None, method=None, candidates=None):
+    out = {
+        "HEADLINE": r["HEADLINE"],
+        "PUBLICATIONDATE": r["PUBLICATIONDATE"],
+        "SUBHEAD": r.get("SUBHEAD", ""),
+        "INTRO": r.get("INTRO", ""),
+        "TEXT": (r.get("TEXT", "") or "")[:4000],
+    }
+    if score is not None:
+        out["match_score"] = score
+    if method:
+        out["match_method"] = method
+    if candidates:
+        out["other_candidates"] = candidates
+    return out
+
+
 def _afr_year(rec):
     return rec["PUBLICATIONDATE"][:4]
 
@@ -499,14 +561,53 @@ def _afr(metric, **p):
                 "peak_month": pm, "peak_month_count": by_m[pm]}
 
     if metric == "find_article":
-        # locate by (partial) headline and optional date YYYYMMDD
-        hq = p.get("headline", "").lower()
-        dq = p.get("date")  # YYYYMMDD
-        for r in recs:
-            if hq in r["HEADLINE"].lower() and (dq is None or r["PUBLICATIONDATE"] == dq):
-                return {"HEADLINE": r["HEADLINE"], "PUBLICATIONDATE": r["PUBLICATIONDATE"],
-                        "INTRO": r.get("INTRO", ""), "TEXT": r.get("TEXT", "")[:4000]}
-        return {"error": "article not found"}
+        # Robust to paraphrase: keyword-overlap ranking over HEADLINE (weighted) + INTRO,
+        # anchored by date when given. Handles "Travel stocks take off on vaccine rollout"
+        # vs "travel shares rising on the vaccine rollout" via token overlap + synonyms.
+        hq = p.get("headline", "")
+        dq = _norm_afr_date(p.get("date"))  # normalize to YYYYMMDD if provided
+
+        # 1) Exact substring fast-path (cheap, and unambiguous when it hits).
+        exact = [r for r in recs
+                 if hq.lower().strip() and hq.lower().strip() in r["HEADLINE"].lower()
+                 and (dq is None or r["PUBLICATIONDATE"] == dq)]
+        if len(exact) == 1:
+            return _article_payload(exact[0], score=None, method="exact")
+
+        # 2) Keyword-overlap ranking.
+        q_tokens = _expand(_tokens(hq))
+        if not q_tokens:
+            return {"error": "no searchable terms in headline query"}
+
+        # Date window: exact day, else same month, else whole corpus (widen only if needed).
+        def _pool(filter_fn):
+            return [r for r in recs if filter_fn(r)]
+
+        pools = []
+        if dq:
+            pools.append(_pool(lambda r: r["PUBLICATIONDATE"] == dq))          # exact day
+            pools.append(_pool(lambda r: r["PUBLICATIONDATE"][:6] == dq[:6]))  # same month
+        pools.append(recs)                                                     # everything
+
+        for pool in pools:
+            scored = []
+            for r in pool:
+                htok = _expand(_tokens(r["HEADLINE"]))
+                itok = _tokens(r.get("INTRO", ""))
+                # headline overlap weighted x3; intro overlap x1
+                h_hits = len(q_tokens & htok)
+                i_hits = len(q_tokens & set(itok))
+                score = 3 * h_hits + i_hits
+                if score > 0:
+                    scored.append((score, h_hits, r))
+            if scored:
+                scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+                best = scored[0][2]
+                runners = [{"HEADLINE": r["HEADLINE"], "PUBLICATIONDATE": r["PUBLICATIONDATE"],
+                            "score": s} for s, _, r in scored[1:4]]
+                return _article_payload(best, score=scored[0][0], method="keyword",
+                                        candidates=runners)
+        return {"error": "article not found", "query_terms": sorted(q_tokens)}
 
     if metric == "share":
         # fraction of records in a year (or overall) matching pattern
